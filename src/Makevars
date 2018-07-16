@@ -1,1 +1,2 @@
-PKG_LIBS=-lodbc
+PKG_CPPFLAGS = 
+PKG_LIBS = -lodbc

@@ -13,8 +13,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <dlfcn.h>
-#include <arpa/inet.h>
-#include <errno.h>
 #else
 #include <winsock2.h>
 #include <windows.h>
@@ -57,22 +55,22 @@ extern void Rf_set_iconv(Rconnection con);
 extern int dummy_fgetc(Rconnection con);
 
 typedef struct rodbcHandle {
-    SQLHDBC	    hDbc;      /* connection handle */
-    SQLHSTMT	  hStmt;     /* statement handle */
-    SQLLEN	    nRows;     /* number of rows and columns in result set */
+    SQLHDBC	hDbc;         /* connection handle */
+    SQLHSTMT	hStmt;        /* statement handle */
+    SQLLEN	nRows;        /* number of rows and columns in result set */
     SQLSMALLINT	nColumns;
-    int channel;      /* as stored on the R-level object */
-    int id;           /* ditto */
-    int useNRows;     /* value of believeNRows */
+    int		channel;      /* as stored on the R-level object */
+    int         id;           /* ditto */
+    int         useNRows;     /* value of believeNRows */
     /* entries used to bind data for result sets and updates */
-    void	*ColData;	  /* this will be allocated as an array */
-    int		nAllocated; /* how many cols were allocated */
+    void	*ColData;	/* this will be allocated as an array */
+    int		nAllocated;     /* how many cols were allocated */
     SQLUINTEGER	rowsFetched;	/* use to indicate the number of rows fetched */
     SQLUINTEGER	rowArraySize;	/* use to indicate the number of rows we expect back */
     SQLUINTEGER	rowsUsed;	/* for when we fetch more than we need */
     void	*msglist;	/* root of linked list of messages */
-    SEXP  extPtr;		/* address of external pointer for this
-                       channel, so we can clear it */
+    SEXP        extPtr;		/* address of external pointer for this
+                                   channel, so we can clear it */
 } RODBCHandle, *pRODBCHandle;
 
 typedef struct {
@@ -101,11 +99,11 @@ static asyncODBC_t asyncODBC[MAX_RODBC_THREADS];
 static inline ssize_t read_next_chunk(asyncODBC_t *t) {
     size_t pos = 0;
     int buflen, rc;
-    const char *ok_answer =
+    char *ok_answer =
         "HTTP/1.1 200 OK\r\n"
         "Server: EXASolution R Package\r\n"
         "Connection: close\r\n\r\n";
-    const char *error_answer =
+    char *error_answer =
         "HTTP/1.1 404 ERROR\r\n"
         "Server: EXASolution R Package\r\n"
         "Connection: close\r\n\r\n";
@@ -116,38 +114,19 @@ static inline ssize_t read_next_chunk(asyncODBC_t *t) {
             // fprintf(stderr, "### error (%d)\n", rc);
             goto error;
         }
-        if (t->chunk_buf[pos] == '\n') {
-          break;
-        }
+        if (t->chunk_buf[pos] == '\n') break;
     }
-
-    if (pos > 19) {
-      goto error;
-    }
-
-    t->chunk_buf[pos] = '\0';
-    buflen = -1;
-
-    if (sscanf(t->chunk_buf, "%x", &buflen) < 1) {
-      goto error;
-    }
-
+    if (pos > 19) goto error;
+    t->chunk_buf[pos] = '\0'; buflen = -1;
+    if (sscanf(t->chunk_buf, "%x", &buflen) < 1) goto error;
     if (buflen == 0) {
         send(t->fd, ok_answer, strlen(ok_answer), 0);
         shutdown(t->fd, 1);
         t->fd = -1;
         return 0;
     }
-
-    if ((buflen + 2) > MAX_HTTP_CHUNK_SIZE) {
-      goto error;
-    }
-
-    buflen = recv(t->fd, t->chunk_buf, buflen + 2, MSG_WAITALL);
-    if (buflen < 3) {
-      goto error;
-    }
-
+    if ((buflen + 2) > MAX_HTTP_CHUNK_SIZE) goto error;
+    if ((buflen = recv(t->fd, t->chunk_buf, buflen + 2, MSG_WAITALL)) < 3) goto error;
     t->chunk_len = buflen - 2;
     t->chunk_pos = 0;
     t->chunk_buf[buflen-2] = '\0';
@@ -162,35 +141,25 @@ error:
 }
 
 static inline ssize_t write_next_chunk(asyncODBC_t *t) {
-    const char *ok_answer =
+    char *ok_answer =
         "HTTP/1.1 200 OK\r\n"
         "Server: EXASolution R Package\r\n"
         "Content-type: application/octet-stream\r\n"
         "Content-disposition: attachment; filename=data.csv\r\n"
         "Connection: close\r\n\r\n";
-
-    const size_t ok_len = strlen(ok_answer);
-    const size_t chunk_len = t->chunk_len;
-    const char *error_answer =
+    size_t ok_len = strlen(ok_answer);
+    size_t chunk_len = t->chunk_len;
+    char *error_answer =
         "HTTP/1.1 404 ERROR\r\n"
         "Server: EXASolution R Package\r\n"
         "Connection: close\r\n\r\n";
 
+
     //fprintf(stderr, "### write_next_chunk %d (%d)\n", t->chunk_len, t->chunk_num);
-    if (chunk_len == 0) {
-      goto error;
-    }
-
-    if (t->chunk_num == 0) {
-      if (send(t->fd, ok_answer, ok_len, 0) != ok_len) {
-        goto error;
-      }
-    }
-
-    if (send(t->fd, t->chunk_buf, chunk_len, 0) != chunk_len) {
-      goto error;
-    }
-
+    if (chunk_len == 0) goto error;
+    if (t->chunk_num == 0)
+        if (send(t->fd, ok_answer, ok_len, 0) != ok_len) goto error;
+    if (send(t->fd, t->chunk_buf, chunk_len, 0) != chunk_len) goto error;
     t->chunk_len = 0;
     t->chunk_num ++;
     return chunk_len;
@@ -203,7 +172,6 @@ error:
 }
 
 static inline ssize_t read_next(asyncODBC_t *t, char *buffer, size_t buflen) {
-
     size_t rest_chunk = t->chunk_len - t->chunk_pos;
     ssize_t readlen = 0, retlen = 0;
     char *buf = buffer;
@@ -220,12 +188,8 @@ static inline ssize_t read_next(asyncODBC_t *t, char *buffer, size_t buflen) {
         retlen += rest_chunk;
 
         readlen = read_next_chunk(t);
-        if (readlen == 0) {
-          return retlen;
-        }
-        if (readlen < 0) {
-          return -1;
-        }
+        if (readlen == 0) return retlen;
+        if (readlen < 0) return -1;
 
         buf = &(buf[rest_chunk]);
         buflen -= rest_chunk;
@@ -235,50 +199,47 @@ static inline ssize_t read_next(asyncODBC_t *t, char *buffer, size_t buflen) {
     return -1;
 }
 
-static size_t pipe_read(void *ptr, const size_t size, const size_t nitems,
-                        const Rconnection con) {
-
+static size_t pipe_read(void *ptr, size_t size, size_t nitems,
+                        Rconnection con)
+{
     asyncODBC_t *t = *((asyncODBC_t**) con->private);
-    const ssize_t len = size * nitems;
-    const ssize_t rlen = read_next(t, ptr, len);
-    if (rlen > 0) {
-      return rlen / size;
-    }
-    return rlen;
+    ssize_t len = size * nitems;
+    len = read_next(t, ptr, len);
+    if (len > 0) return len / size;
+    return len;
 }
 
-static int file_fgetc_internal(const Rconnection con) {
+static int file_fgetc_internal(Rconnection con)
+{
     asyncODBC_t *t = *((asyncODBC_t**) con->private);
-    if ((t->chunk_len - t->chunk_pos) < 1) {
-        if (read_next_chunk(t) < 1) {
-          return -1;
-        }
-    }
+    if ((t->chunk_len - t->chunk_pos) < 1)
+        if (read_next_chunk(t) < 1)
+            return -1;
     return (int) t->chunk_buf[t->chunk_pos++];
 }
 
 extern int dummy_vfprintf(Rconnection con, const char *format, va_list ap);
-
-static int pipe_vfprintf(const Rconnection con, const char *format, va_list ap) {
+static int pipe_vfprintf(Rconnection con, const char *format, va_list ap)
+{
     return dummy_vfprintf(con, format, ap);
 }
 
 static size_t pipe_write(const void *ptr, size_t size, size_t nitems,
-                         const Rconnection con) {
-
+                         Rconnection con)
+{
     asyncODBC_t *t = *((asyncODBC_t**) con->private);
     char *src = (char*) ptr;
     size_t cur_rest = MAX_HTTP_CHUNK_SIZE - t->chunk_len;
     size_t len = size * nitems;
 
     //fprintf(stderr, "### pipe_write %d: %d/%d\n", len, t->chunk_len, t->chunk_num);
-    for (;;) {
+    for (;;) {    
         if (cur_rest >= len) {
             memcpy(&(t->chunk_buf[t->chunk_len]), src, len);
             t->chunk_len += len;
             return len;
         }
-
+        
         if (cur_rest > 0) {
             memcpy(&(t->chunk_buf[t->chunk_len]), src, cur_rest);
             t->chunk_len += cur_rest;
@@ -294,7 +255,8 @@ static size_t pipe_write(const void *ptr, size_t size, size_t nitems,
     return -1;
 }
 
-static int pipe_fflush(Rconnection con) {
+static int pipe_fflush(Rconnection con)
+{
     asyncODBC_t *t = *((asyncODBC_t**) con->private);
     if (t->chunk_len > 0) {
         if (write_next_chunk(t) < 0)
@@ -304,21 +266,21 @@ static int pipe_fflush(Rconnection con) {
     return 0;
 }
 
-static void *asyncRODBCQueryExecuter(void *arg) {
+static void *asyncRODBCQueryExecuter(void *arg)
+{
     int slot = *(int*) arg;
     asyncODBC_t *t = &(asyncODBC[slot]);
 
     t->res = SQLExecDirect(t->stmt, t->query, SQL_NTS);
     t->done = 1;
-    if (t->res != SQL_SUCCESS && t->res != SQL_SUCCESS_WITH_INFO) {
-      shutdown(t->fd, SHUT_RDWR);
-    }
+    if (t->res != SQL_SUCCESS && t->res != SQL_SUCCESS_WITH_INFO)
+        shutdown(t->fd, SHUT_RDWR);
     return NULL;
 }
 
 SEXP asyncRODBCIOStart(SEXP slotA, SEXP hostA, SEXP portA) {
-    const int slot = asInteger(slotA);
-    const int port = asInteger(portA);
+    int slot = asInteger(slotA);
+    int port = asInteger(portA);
     const char *host = CHAR(STRING_ELT(hostA, 0));
     asyncODBC_t *t = NULL;
     struct sockaddr_in serv_addr;
@@ -326,11 +288,19 @@ SEXP asyncRODBCIOStart(SEXP slotA, SEXP hostA, SEXP portA) {
     struct { int m:32; int x:32; int y:32; } proxy_header;
     struct { int v:32; int port:32; char s[16]; } proxy_answer;
 
-    memset((char *) &proxy_header, 0, sizeof(proxy_header));
     proxy_header.m = 0x02212102;
+#if __BYTE_ORDER == __BIG_ENDIAN
+#ifndef _WIN32
+    proxy_header.x = 0x01000000;
+    proxy_header.y = 0x01000000;
+#else
     proxy_header.x = 1;
     proxy_header.y = 1;
-
+#endif
+#else
+    proxy_header.x = 1;
+    proxy_header.y = 1;
+#endif
 
     if (slot < 0 || slot >= MAX_RODBC_THREADS) {
         error("Slot need to be from 0 to %d.", MAX_RODBC_THREADS);
@@ -371,7 +341,7 @@ SEXP asyncRODBCIOStart(SEXP slotA, SEXP hostA, SEXP portA) {
     }
     memcpy((char *)&serv_addr.sin_addr.s_addr, (char *) server->h_addr, server->h_length);
 
-    if (connect(t->fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+    if (connect(t->fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {	
 #ifndef _WIN32
         error("Could not connect to %s:%d", host, port);
 #else
@@ -386,22 +356,10 @@ SEXP asyncRODBCIOStart(SEXP slotA, SEXP hostA, SEXP portA) {
 	    goto error;
         }
 
-#ifndef _WIN32
-	errno = 0;
-#endif
-
 	if ((r = recv(t->fd, (void*)&(proxy_answer), sizeof(proxy_answer), MSG_WAITALL)) != sizeof(proxy_answer)) {
-#ifndef _WIN32
-	 // error("Proxy header... - M = %d; x = %d; y = %d", proxy_header.m, proxy_header.x, proxy_header.y);
-	  error("Failed to receive proxy header from %s:%d (%d != %d); errno: %d", inet_ntoa(serv_addr.sin_addr), ntohs(serv_addr.sin_port), r, sizeof(proxy_answer), errno);
-#else
-	  error("Failed to receive proxy header from %s:%d (%d != %d; WS error code: %d)",  inet_ntoa(serv_addr.sin_addr), ntohs(serv_addr.sin_port), r, sizeof(proxy_answer), WSAGetLastError());
-#endif
+            error("Failed to receive proxy header (%d != %d)", r, sizeof(proxy_answer));
             goto error;
         }
-//	else {
-//	  REprintf("Successfully received proxy header from %s:%d (%d != %d)\n", inet_ntoa(serv_addr.sin_addr), ntohs(serv_addr.sin_port), r, sizeof(proxy_answer));
-//	}
     }
     proxy_answer.s[15] = '\0';
     memcpy(t->proxyHost, proxy_answer.s, 16);
@@ -419,7 +377,7 @@ error:
 
 SEXP asyncRODBCProxyHost(SEXP slotA) {
     SEXP host;
-    const int slot = asInteger(slotA);
+    int slot = asInteger(slotA);
     if (slot < 0 || slot >= MAX_RODBC_THREADS) {
         error("Slot need to be from 0 to %d.", MAX_RODBC_THREADS);
         return ScalarInteger(-1);
@@ -433,7 +391,7 @@ SEXP asyncRODBCProxyHost(SEXP slotA) {
 }
 
 SEXP asyncRODBCProxyPort(SEXP slotA) {
-    const int slot = asInteger(slotA);
+    int slot = asInteger(slotA);
     if (slot < 0 || slot >= MAX_RODBC_THREADS) {
         error("Slot need to be from 0 to %d.", MAX_RODBC_THREADS);
         return ScalarInteger(-1);
@@ -443,7 +401,7 @@ SEXP asyncRODBCProxyPort(SEXP slotA) {
 }
 
 SEXP asyncRODBCIsDone(SEXP slotA) {
-    const int slot = asInteger(slotA);
+    int slot = asInteger(slotA);
     if (slot < 0 || slot >= MAX_RODBC_THREADS) {
         error("Slot need to be from 0 to %d.", MAX_RODBC_THREADS);
         return ScalarInteger(-1);
@@ -456,8 +414,8 @@ SEXP asyncRODBCMax() {
 }
 
 SEXP asyncRODBCQueryStart(SEXP slotA, SEXP chan, SEXP query, SEXP writerA) {
-    const int slot = asInteger(slotA);
-    const int writer = asInteger(writerA);
+    int slot = asInteger(slotA);
+    int writer = asInteger(writerA);
     asyncODBC_t *t = NULL;
     char line[4096], data = '\0';;
     ssize_t len = -1;
@@ -483,7 +441,7 @@ SEXP asyncRODBCQueryStart(SEXP slotA, SEXP chan, SEXP query, SEXP writerA) {
     t->stmt = NULL;
     t->res = SQLAllocHandle(SQL_HANDLE_STMT, rodbc->hDbc, &t->stmt);
     if (t->res != SQL_SUCCESS && t->res != SQL_SUCCESS_WITH_INFO) {
-        error("Could not allocate SQLAllocHandle (%i)", t->res);
+        error("Could not allocate SQLAllocHandle");
         goto error;
     }
 
@@ -508,15 +466,12 @@ SEXP asyncRODBCQueryStart(SEXP slotA, SEXP chan, SEXP query, SEXP writerA) {
             error("Could not read header.");
             goto error;
         }
-        line[pos++] = data;
-        line[pos] = '\0';
+        line[pos++] = data; line[pos] = '\0';
         if (data == '\n' && pos > 1 && line[pos-2] == '\r') {
 	    // fprintf(stderr, "### got line: %s", line);
-            if (pos == 2) {
-              break; /* header finished */
-            }
-            pos = 0;
-            line[0] = '\0';
+            if (pos == 2)
+                break; /* header finished */
+            pos = 0; line[0] = '\0';
         }
     } while(1);
 
@@ -555,7 +510,7 @@ error:
 }
 
 SEXP asyncRODBCQueryCheck(SEXP slotA) {
-    const int slot = asInteger(slotA);
+    int slot = asInteger(slotA);
     if (slot < 0 || slot >= MAX_RODBC_THREADS) {
         error("Slot need to be from 0 to %d.", MAX_RODBC_THREADS);
         return ScalarInteger(-1);
@@ -565,8 +520,8 @@ SEXP asyncRODBCQueryCheck(SEXP slotA) {
 
 SEXP asyncRODBCQueryFinish(SEXP slotA, SEXP closeA) {
     int err = 0, ret = -1, reterr = 0;
-    const int slot = asInteger(slotA);
-    const int closefd = asInteger(closeA);
+    int slot = asInteger(slotA);
+    int closefd = asInteger(closeA);
     SQLCHAR sqlstate[6], msg[SQL_MAX_MESSAGE_LENGTH];
     SQLINTEGER NativeError;
     SQLSMALLINT MsgLen;
@@ -583,13 +538,10 @@ SEXP asyncRODBCQueryFinish(SEXP slotA, SEXP closeA) {
         t->fd = -1;
     }
 
-    if (t->asyncThread_started && pthread_join(t->asyncThread, NULL)) {
-      ++err;
-    }
+    if (t->asyncThread_started && pthread_join(t->asyncThread, NULL))
+        ++err;
 
-    if (t->done) {
-      ret = 0;
-    }
+    if (t->done) ret = 0;
     t->done = 0;
 
     if (t->res != SQL_SUCCESS && t->res != SQL_SUCCESS_WITH_INFO) {
@@ -599,22 +551,19 @@ SEXP asyncRODBCQueryFinish(SEXP slotA, SEXP closeA) {
                                 &MsgLen);
         if (t->res != SQL_SUCCESS && t->res != SQL_SUCCESS_WITH_INFO) {
             error("Unknown ODBC error");
-        } else {
-          reterr = 1;
-        }
+        } else reterr = 1;
     }
 
-    if (t->stmt != NULL) {
-      (void)SQLFreeHandle(SQL_HANDLE_STMT, t->stmt);
-    }
+    if (t->stmt != NULL)
+        (void)SQLFreeHandle(SQL_HANDLE_STMT, t->stmt);
 
     t->conn = NULL;
     t->stmt = NULL;
     t->asyncThread_started = 0;
 
-    if (reterr) {
-      error("%s %d %s", sqlstate, (int)NativeError, msg);
-    } else if (!closefd) {
+    if (reterr)
+        error("%s %d %s", sqlstate, (int)NativeError, msg);
+    else if (!closefd) {
         if (err > 1) error("Could not finish threads.");
         if (err > 0) error("Could not finish thread.");
         if (ret) warning("Slot %d was not done jet.", slot);
@@ -638,11 +587,13 @@ R_CallMethodDef CallEntries[] = {
 
 void R_init_exasol(DllInfo *dll)
 {
+    int i;
+
     R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
     R_useDynamicSymbols(dll, FALSE);
     R_forceSymbols(dll, TRUE);
 
-    for (int i = 0; i < MAX_RODBC_THREADS; ++i) {
+    for (i = 0; i < MAX_RODBC_THREADS; ++i) {
         asyncODBC[i].rodbc = NULL;
         asyncODBC[i].stmt = NULL;
         asyncODBC[i].done = 0;
